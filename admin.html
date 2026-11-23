@@ -75,6 +75,16 @@ td.dc{font-family:ui-monospace,Consolas,monospace;font-weight:600;color:#0d47a1}
 </div>
 
 <script>
+/* 一次性配置：打开 admin.html#tk=令牌 就自动存到本机，并把令牌从地址栏抹掉 */
+(function () {
+  try {
+    var m = location.hash.match(/tk=([^&]+)/);
+    if (m) {
+      localStorage.setItem('tt_token', decodeURIComponent(m[1]));
+      try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
+    }
+  } catch (e) {}
+})();
 var OWNER = 'Jjqgd', REPO = 'tietuxueliandingidgnban', FILE = 'licenses.json', BRANCH = 'main';
 var PERM = 4102444800000;
 var TAGS = ['ABCDEFGHJKLMNPQRSTUVWXYZ23456789'];
