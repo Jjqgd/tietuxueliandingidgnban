@@ -511,7 +511,11 @@ function changeFontSize(delta) {
 var splashDelay = 4800;
 setTimeout(function() { document.getElementById('splash-screen').classList.add('hidden'); }, splashDelay);
 // ================= 授权系统 =================
-var AUTH_SECRET = 'ETwGVfCXjcDu3d1PUGDzPBQIV1f0oTsGKSsN56tH6dEt';
+/* 授权改为「设备白名单」制：licenses.json 里出现本机设备码 = 授权通过。
+   前端不再保存任何密钥，所以密钥泄露也造不出可用授权，抄别人设备码也用不了。 */
+var LIC_URL = 'licenses.json';                     /* 授权白名单（与 index.html 同目录） */
+var LIC_CACHE_KEY = 'xjt_lic_snapshot_v1';         /* 白名单本地快照（断网时用） */
+var LIC_MAX_OFFLINE = 7 * 24 * 60 * 60 * 1000;     /* 允许离线宽限 7 天 */
 var AUTH_TRIAL_MS = 2 * 24 * 60 * 60 * 1000;     /* 免费体验 2 天 */
 var AUTH_HEARTBEAT = 20 * 60 * 1000;             /* 心跳 20 分钟 */
 var AUTH_PERM = 4102444800000;                   /* 永久授权 2100-01-01 */
@@ -635,10 +639,8 @@ function authIdbGet() {
 }
 function authCkSet(v) { try { document.cookie = AUTH_KEYS.ck + '=' + encodeURIComponent(v) + ';max-age=31536000;path=/;SameSite=Lax'; } catch (e) {} }
 function authCkGet() { var m = document.cookie.match(new RegExp('(?:^|; )' + AUTH_KEYS.ck + '=([^;]*)')); return m ? decodeURIComponent(m[1]) : null; }
-function authSign(rec) {
-  var c = Object.assign({}, rec); delete c.sig;
-  return authSha256(AUTH_SECRET + '|' + JSON.stringify(c)).then(function (h) { return h.slice(0, 16); });
-}
+/* 白名单模式下不再做本地签名：授权真假只以线上 licenses.json 为准 */
+function authSign(rec) { return Promise.resolve('w'); }
 function authSaveAll(rec) {
   return authSign(rec).then(function (sig) {
     rec.sig = sig; var s = JSON.stringify(rec);
@@ -660,17 +662,10 @@ function authReadAll() {
     var valid = [];
     list.forEach(function (s) { if (!s) return; try { var r = JSON.parse(s); if (r && r.sig) valid.push(r); } catch (e) {} });
     if (!valid.length) return { rec: null, tamper: false };
-    return Promise.all(valid.map(function (r) {
-      var c = Object.assign({}, r); delete c.sig;
-      return authSha256(AUTH_SECRET + '|' + JSON.stringify(c)).then(function (h) { return h.slice(0, 16) === r.sig; });
-    })).then(function (oks) {
-      var good = valid.filter(function (_, i) { return oks[i]; });
-      if (!good.length) return { rec: null, tamper: true };
-      var map = {};
-      good.forEach(function (r) { var k = JSON.stringify([r.fp, r.fpl, r.first, r.exp, r.act]); (map[k] = map[k] || []).push(r); });
-      var keys = Object.keys(map).sort(function (a, b) { return map[b].length - map[a].length; });
-      return { rec: map[keys[0]][0], tamper: keys.length > 1 };
-    });
+    var map = {};
+    valid.forEach(function (r) { var k = JSON.stringify([r.fp, r.fpl, r.first, r.exp, r.act]); (map[k] = map[k] || []).push(r); });
+    var keys = Object.keys(map).sort(function (a, b) { return map[b].length - map[a].length; });
+    return { rec: map[keys[0]][0], tamper: keys.length > 1 };
   });
 }
 
@@ -759,35 +754,73 @@ function guardGate() {
   authLock(authLockReason || 'device'); return false;
 }
 
-/* ---------- 激活码校验 ---------- */
-function authVerifyCode(code, devCode) {
-  var dc = devCode || authDeviceCode;
-  var p = String(code).toUpperCase().replace(/[^A-Z0-9-]/g, '').split('-');
-  if (p.length !== 3) return Promise.resolve(null);
-  var tag = p[2], got = p[0] + p[1];
-  return authSha256(AUTH_SECRET + '|' + dc + '|' + tag).then(function (h) {
-    if (authB32(authHexU8(h), 10) !== got) return null;
-    return tag === 'PERM' ? AUTH_PERM : parseInt(tag.slice(1), 36);
+/* ---------- 设备白名单校验 ---------- */
+function licNorm(s) { return String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+
+function licFetch() {
+  return new Promise(function (resolve) {
+    var done = false;
+    var timer = setTimeout(function () { if (!done) { done = true; resolve(null); } }, 7000);
+    var x = new XMLHttpRequest();
+    x.open('GET', LIC_URL + '?t=' + Date.now() + '&d=' + licNorm(authDeviceCode).slice(0, 5), true);
+    x.timeout = 7000;
+    x.onload = function () {
+      if (done) return;
+      try {
+        var d = JSON.parse(x.responseText);
+        if (!d || !d.list) throw 0;
+        try { localStorage.setItem(LIC_CACHE_KEY, JSON.stringify({ ts: Date.now(), list: d.list })); } catch (e) {}
+        done = true; clearTimeout(timer); resolve(d.list);
+      } catch (e) { done = true; clearTimeout(timer); resolve(null); }
+    };
+    x.onerror = x.ontimeout = function () { if (!done) { done = true; clearTimeout(timer); resolve(null); } };
+    x.send();
   });
 }
 
-function doLogin() {
-  var box = document.getElementById('regCodeInput');
-  var code = box ? box.value.trim() : '';
-  if (!code) return showToast('请先输入激活码', true);
-  if (!authDeviceCode) return showToast('设备码计算中，请稍候再试', true);
-  netTime().then(function (now) {
-    if (now == null) { showToast('需要联网激活，请连接网络后重试', true); return; }
-    authVerifyCode(code).then(function (exp) {
-      if (exp == null) { showToast('激活码无效或不属于本设备', true); return; }
+function licLookup(list, dc) {
+  if (!list) return null;
+  var key = licNorm(dc);
+  if (!key) return null;
+  for (var i = 0; i < list.length; i++) {
+    var it = list[i];
+    if (it && licNorm(it.d) === key) return it;
+  }
+  return null;
+}
+
+function licSnapshot() {
+  try { var s = JSON.parse(localStorage.getItem(LIC_CACHE_KEY) || 'null'); if (s && s.list) return s; } catch (e) {}
+  return null;
+}
+
+/* 用户手动点「我已开通 / 刷新授权」 */
+function doRefreshLic() {
+  if (!authDeviceCode) { showToast('设备码计算中，请稍候再试', true); return; }
+  showToast('正在刷新授权…');
+  licFetch().then(function (list) {
+    if (!list) { showToast('网络不通，请检查网络后再试', true); return; }
+    var hit = licLookup(list, authDeviceCode);
+    if (!hit) {
       authReadAll().then(function (res) {
-        var rec = res.rec || { v: 2, fp: authFp, fpl: authFpLoose, first: now, exp: 0, act: false, code: '', maxSeen: now };
-        rec.act = true; rec.exp = exp; rec.code = code; rec.maxSeen = now;
-        authSaveAll(rec).then(function () {
-          pendingTrial = false;
-          showToast(exp >= AUTH_PERM ? '永久授权激活成功' : '授权激活成功');
-          authOk('activated', exp);
-        });
+        var r = res.rec, now = Date.now();
+        if (r && r.exp > now && r.act) { authOk('activated', r.exp); return; }
+        authReady = true; isAuthorized = false; currentMode = 'login'; renderLogin();
+        showToast('这台设备还没开通，请联系客服付款开通后再点刷新', true);
+      });
+      return;
+    }
+    var exp = parseInt(hit.exp) || 0;
+    if (exp <= Date.now()) { showToast('授权已到期，请联系客服续费', true); authLock('expired'); return; }
+    authReadAll().then(function (res) {
+      var now = Date.now();
+      var rec = res.rec || { v: 2, fp: authFp, fpl: authFpLoose, first: now, exp: 0, act: false, code: '', maxSeen: now };
+      rec.act = true; rec.exp = exp; rec.code = 'WHITE';
+      if (!rec.maxSeen || now > rec.maxSeen) rec.maxSeen = now;
+      authSaveAll(rec).then(function () {
+        pendingTrial = false;
+        showToast(exp >= AUTH_PERM ? '永久授权已开通' : '授权已开通');
+        authOk('activated', exp);
       });
     });
   });
@@ -827,30 +860,47 @@ function authBoot() {
   Promise.all([authFpOf(c, false), authFpOf(c, true)]).then(function (f) {
     authFp = f[0]; authFpLoose = f[1]; authDeviceCode = authDeviceCodeOf(f[0]);
     if (currentMode === 'login') render();
-    return netTime();
-  }).then(function (now) {
-    if (now == null) { authLock('offline'); return; }
-    return authReadAll().then(function (res) {
-      if (res.tamper) { authLock('tamper'); return; }
-      var rec = res.rec;
+    return authReadAll();
+  }).then(function (res) {
+    var rec = res.rec;
+    return Promise.all([licFetch(), netTime()]).then(function (r) {
+      var list = r[0], nt = r[1];
+      var now = nt || Date.now();
+      var online = !!list;
+
+      if (online) {
+        var hit = licLookup(list, authDeviceCode);
+        if (hit) {
+          var exp = parseInt(hit.exp) || 0;
+          if (exp <= now) { authLock('expired'); return; }
+          var r2 = rec || { v: 2, fp: authFp, fpl: authFpLoose, first: now, exp: 0, act: false, code: '', maxSeen: now };
+          r2.act = true; r2.exp = exp; r2.code = 'WHITE';
+          if (!r2.maxSeen || now > r2.maxSeen) r2.maxSeen = now;
+          authSaveAll(r2).then(function () { authOk('activated', exp); });
+          return;
+        }
+      }
 
       if (!rec) {
-        pendingTrial = true;
-        authReady = true;
-        isAuthorized = false;
-        currentMode = 'login';
-        render();
+        pendingTrial = true; authReady = true; isAuthorized = false; currentMode = 'login'; render();
         return;
       }
       pendingTrial = false;
-
       if (rec.fp !== authFp && rec.fpl !== authFpLoose) { authLock('device'); return; }
+
+      /* 线上白名单已读到但没有这台设备 = 未开通或已被停用 */
+      if (online && rec.act) { authLock('device'); return; }
+
+      if (!online) {
+        var snap = licSnapshot();
+        if (!snap || now - snap.ts > LIC_MAX_OFFLINE) { authLock('offline'); return; }
+      }
       if (rec.maxSeen && now < rec.maxSeen - 5 * 60000) { authLock('clock'); return; }
       rec.maxSeen = now; authSaveAll(rec);
-      if (rec.act) { if (rec.exp <= now) { authLock('expired'); return; } authOk('activated', rec.exp); }
-      else { if (rec.exp <= now) { authLock('trial'); return; } authOk('trial', rec.exp); }
+      if (rec.exp <= now) { authLock(rec.act ? 'expired' : 'trial'); return; }
+      authOk(rec.act ? 'activated' : 'trial', rec.exp);
     });
-  });
+  }).catch(function () { authLock('offline'); });
 }
 function authRetry() {
   if (currentMode === 'login') { 
@@ -882,28 +932,40 @@ function authRetry() {
 
 var authOfflineCount = 0;
 function authHeartbeat() {
-  netTime().then(function (now) {
-    if (now == null) {
+  return Promise.all([licFetch(), netTime()]).then(function (r) {
+    var list = r[0], nt = r[1];
+    var now = nt || Date.now();
+    if (!list) {
       authOfflineCount++;
       if (authOfflineCount >= 6) {
         if (isAuthorized) authLock('offline');
       } else {
-        console.warn('网络不佳，已切换至离线模式，剩余容错次数：' + (6 - authOfflineCount));
+        console.warn('网络不佳，剩余离线容错 ' + (6 - authOfflineCount) + ' 次');
       }
       return;
     }
     authOfflineCount = 0;
     if (!isAuthorized) return;
-    if (authExpire < AUTH_PERM && authExpire <= now) {
-      authLock('expired');
+
+    var hit = licLookup(list, authDeviceCode);
+    if (hit) {
+      var exp = parseInt(hit.exp) || 0;
+      if (exp <= now) { authLock('expired'); return; }
+      authExpire = exp;
+      authReadAll().then(function (res) {
+        if (res.rec) {
+          res.rec.maxSeen = now; res.rec.exp = exp; res.rec.act = true; res.rec.code = 'WHITE';
+          authSaveAll(res.rec);
+        }
+        if (isTrialMode) authOk('activated', exp);
+      });
       return;
     }
+    if (!isTrialMode) { authLock('device'); return; }
     authReadAll().then(function (res) {
-      if (res.tamper) { authLock('tamper'); return; }
-      if (res.rec) {
-        res.rec.maxSeen = now;
-        authSaveAll(res.rec);
-      }
+      if (!res.rec) return;
+      if (res.rec.exp <= now) { authLock('trial'); return; }
+      res.rec.maxSeen = now; authSaveAll(res.rec);
     });
   });
 }
@@ -1184,10 +1246,10 @@ function renderLogin() {
   var tips = {
     offline: '<b>网络未连接</b><br>请检查手机网络，连接后点击下方按钮重新校验授权即可继续使用（做题进度不会丢失）。',
     clock: '<b>检测到系统时间异常</b><br>授权记录与你当前时间不符，请联系客服处理。',
-    device: '<b>当前设备未授权</b><br>请把下方设备码发给客服，获取本机专属激活码。',
-    expired: '<b>授权已到期</b><br>续费或购买永久授权请联系客服，输入新激活码即可继续使用。',
-    trial: '<b>免费体验已结束</b><br>体验期为 2 天。请输入激活码继续使用。',
-    tamper: '<b>授权记录异常</b><br>检测到本地记录被修改，请重新输入激活码。',
+    device: '<b>本机尚未开通授权</b><br>复制下方设备码发给客服，付款后客服会为你开通。开通后点下面【我已开通，立即刷新】即可。',
+    expired: '<b>授权已到期</b><br>续费请联系客服，付款开通后点【我已开通，立即刷新】。',
+    trial: '<b>免费体验已结束</b><br>体验期为 2 天。想继续使用，把设备码发给客服开通即可。',
+    tamper: '<b>本地记录异常</b><br>点下方【我已开通，立即刷新】重新校验一次即可恢复。',
     env: '<b>请从钉钉工作台进入</b><br>本应用只支持钉钉客户端访问，请在钉钉里点开“铁途学练”，不要复制链接到浏览器。'
   };
 
@@ -1205,10 +1267,15 @@ function renderLogin() {
       <div style="background:#eff6ff; border:2px solid #bfdbfe; border-radius:12px; padding:20px 15px; margin-bottom:15px; text-align:center;">
         <div style="font-size:1.1rem; font-weight:bold; color:#0d47a1; margin-bottom:8px;">🎁 欢迎使用铁途学练</div>
         <div style="font-size:0.85rem; color:#475569; line-height:1.6; margin-bottom:15px;">
-          您可以先免费体验 <b style="color:#b71c1c; font-size:1rem;">2 天</b><br>或直接输入客服提供的激活码。
+          您可以先免费体验 <b style="color:#b71c1c; font-size:1rem;">2 天</b><br>已经付款开通的，点下方第二个按钮。
         </div>
         <button class="btn btn-green btn-block" style="padding:13px; font-size:1rem; margin-bottom:10px; box-shadow:0 4px 6px rgba(16,185,129,0.2);" onclick="startTrialOnce()">🎁 开启 2 天免费体验</button>
-        <button class="btn btn-outline btn-block" style="padding:13px; font-size:1rem;" onclick="chooseActivate()">🔑 我有激活码，直接激活</button>
+        <button class="btn btn-outline btn-block" style="padding:13px; font-size:1rem;" onclick="doRefreshLic()">✅ 我已开通，立即刷新</button>
+        <div style="margin-top:12px; background:#f1f5f9; border-radius:8px; padding:10px; font-size:0.8rem; text-align:left;">
+          <div style="color:#64748b; margin-bottom:4px;">本机设备码（付款前先复制发给客服）</div>
+          <div style="font-weight:bold; color:#0d47a1; letter-spacing:1px; word-break:break-all; margin-bottom:6px;">${dc}</div>
+          <button class="btn btn-outline" style="padding:5px 10px; font-size:0.8rem;" onclick="copyDeviceId('${authDeviceCode}')">📋 复制设备码</button>
+        </div>
       </div>`;
   }
 
@@ -1248,9 +1315,10 @@ function renderLogin() {
                           </div>
                         </div>
 
-        <div style="text-align:left; font-size:0.85rem; font-weight:bold; color:#475569; margin-bottom:5px;">请输入专属注册码：</div>
-        <input type="text" id="regCodeInput" placeholder="请粘贴客服发给您的注册码" style="width:100%;padding:12px;border:2px solid #e2e8f0;border-radius:8px;text-align:center;font-size:1rem;margin-bottom:15px; text-transform:uppercase;">
-        <button class="btn btn-primary btn-block" onclick="doLogin()" style="padding:14px; font-size:1.1rem; box-shadow: 0 4px 10px rgba(13, 71, 161, 0.3);">立即激活正式版</button>
+        <div style="background:#ecfdf5; border:1px solid #a7f3d0; border-radius:8px; padding:12px; text-align:left; font-size:0.85rem; color:#065f46; line-height:1.8; margin-bottom:12px;">
+          <b>开通步骤：</b><br>① 复制上方设备码发给客服<br>② 微信 / 支付宝付款<br>③ 客服在后台开通后，点下面按钮刷新
+        </div>
+        <button class="btn btn-primary btn-block" onclick="doRefreshLic()" style="padding:14px; font-size:1.05rem; box-shadow: 0 4px 10px rgba(13, 71, 161, 0.3);">✅ 我已开通，立即刷新</button>
       ` : ''}
 
       <div style="margin-top:20px; padding:15px; background:#f8fafc; border:1px dashed #cbd5e1; border-radius:8px; text-align:left;">
