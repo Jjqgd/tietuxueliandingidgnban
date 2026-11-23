@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>请在钉钉内打开 - 铁途学练</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #f7f5f0; color: #221f1a;
+    font-family: -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif;
+    padding: calc(24px + env(safe-area-inset-top, 0px)) 24px calc(24px + env(safe-area-inset-bottom, 0px));
+  }
+  .wrap { max-width: 420px; width: 100%; text-align: center; }
+  .seal {
+    width: 76px; height: 76px; margin: 0 auto 26px; border-radius: 50%;
+    border: 3px solid #b71c1c; color: #b71c1c;
+    display: flex; align-items: center; justify-content: center;
+    font-family: "KaiTi", "STKaiti", serif; font-size: 26px; font-weight: 700; letter-spacing: 2px;
+    background: rgba(183, 28, 28, 0.04);
+  }
+  h1 { font-size: 21px; font-weight: 700; color: #b71c1c; margin-bottom: 12px; letter-spacing: 1px; }
+  .sub { font-size: 14px; color: #64748b; line-height: 1.9; margin-bottom: 28px; }
+  .card {
+    background: #fff; border: 1px solid #e6e2d8; border-radius: 14px;
+    padding: 22px 20px; text-align: left; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+  }
+  .card-title {
+    font-size: 15px; font-weight: 700; color: #0d47a1; margin-bottom: 16px;
+    padding-left: 9px; border-left: 4px solid #0d47a1; line-height: 1.2;
+  }
+  .step { display: flex; gap: 12px; margin-bottom: 15px; }
+  .step:last-child { margin-bottom: 0; }
+  .no {
+    flex: 0 0 24px; height: 24px; border-radius: 50%; background: #0d47a1; color: #fff;
+    font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+  }
+  .txt { font-size: 14px; line-height: 1.7; color: #334155; padding-top: 2px; }
+  .txt b { color: #221f1a; }
+  .warn {
+    margin-top: 24px; font-size: 12.5px; color: #94a3b8; line-height: 1.8;
+    border-top: 1px dashed #ded9cd; padding-top: 16px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="seal">铁途</div>
+  <h1>请在钉钉内打开</h1>
+  <div class="sub">这个页面只支持从钉钉工作台进入<br>用浏览器、微信或电脑浏览器打开都无法使用</div>
+
+  <div class="card">
+    <div class="card-title">正确进入方式</div>
+    <div class="step">
+      <div class="no">1</div>
+      <div class="txt">打开手机或电脑的 <b>钉钉</b>，进入<b>工作台</b></div>
+    </div>
+    <div class="step">
+      <div class="no">2</div>
+      <div class="txt">在工作台里找到 <b>铁途学练</b> 这个应用</div>
+    </div>
+    <div class="step">
+      <div class="no">3</div>
+      <div class="txt">点开即可正常使用，做题记录都还在</div>
+    </div>
+  </div>
+
+  <div class="warn">
+    如果工作台里找不到这个应用，请联系管理员开通权限。<br>
+    请不要把链接复制到浏览器或转发给他人，链接在钉钉外无法使用。
+  </div>
+
+  <div id="ua" style="display:none; margin-top:14px; font-size:11px; line-height:1.7; color:#a8a29e; word-break:break-all; text-align:left;"></div>
+</div>
+<script>
+  if (location.search.indexOf('debug=1') > -1) {
+    var el = document.getElementById('ua');
+    el.style.display = 'block';
+    el.textContent = 'UA: ' + navigator.userAgent;
+  }
+</script>
+</body>
+</html>
